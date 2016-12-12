@@ -59,7 +59,7 @@ class L2Switch(ABCRyuApp):
 
     def __init__(self, contr):
         self._contr = contr
-        self._table_id_l2 = 2
+        self._table_id_l2 = 4
         self.mac_to_port = {}
         self._supported = self._verify_contr_handlers()
             

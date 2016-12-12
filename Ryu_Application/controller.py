@@ -25,6 +25,9 @@ from ryu.controller import dpset
 # Application modules
 from l2switch.l2switch import L2Switch
 from aclswitch.aclswitch import ACLSwitch
+from authenticator.dot1xforwarder.dot1xforwarder import Dot1XForwarder
+from authenticator.capflow.CapFlow import CapFlow
+
 
 __author__ = "Jarrod N. Bakker"
 __status__ = "Development"
@@ -55,6 +58,8 @@ class Controller(dpset.DPSet):
         
         self._register_app(L2Switch(self))
         self._register_app(ACLSwitch(self))
+        self._register_app(Dot1XForwarder(self))
+        self._register_app(CapFlow(self))
         
 
     def get_ofpe_handlers(self):
