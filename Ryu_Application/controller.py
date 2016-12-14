@@ -21,6 +21,9 @@ from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, HANDSHAKE
 from ryu.controller.handler import set_ev_cls
 
 from ryu.controller import dpset
+from ryu.controller.dpset import EventDPReconnected, EventDP
+import warnings
+
 
 # Application modules
 from l2switch.l2switch import L2Switch
@@ -28,10 +31,13 @@ from aclswitch.aclswitch import ACLSwitch
 from authenticator.dot1xforwarder.dot1xforwarder import Dot1XForwarder
 from authenticator.capflow.CapFlow import CapFlow
 
+from faucet.faucet_copy import Faucet
+from faucet.faucet_events import EventFaucetReconfigure, EventFaucetResolveGateways, EventFaucetHostExpire
+
+import signal
 
 __author__ = "Jarrod N. Bakker"
 __status__ = "Development"
-
 
 class Controller(dpset.DPSet):
     """Abstracts the details of the Ryu controller.
@@ -45,6 +51,16 @@ class Controller(dpset.DPSet):
     _EVENT_OFP_SW_FEATURES = ofp_event.EventOFPSwitchFeatures.__name__
     _EVENT_OFP_FLOW_REMOVED = ofp_event.EventOFPFlowRemoved.__name__
     _EVENT_OFP_PACKET_IN = ofp_event.EventOFPPacketIn.__name__
+    _EVENT_OFP_PORT_STATUS = ofp_event.EventOFPPortStatus.__name__
+    _EVENT_OFP_ERR = ofp_event.EventOFPErrorMsg.__name__
+    
+    _EVENT_FAUCET_RECONFIG = EventFaucetReconfigure.__name__
+    _EVENT_FAUCET_RSLV_GW = EventFaucetResolveGateways.__name__
+    _EVENT_FAUCET_HOST_EXP = EventFaucetHostExpire.__name__
+    
+    _EVENT_DPSET_EV = dpset.EventDP.__name__
+    _EVENT_DPSET_RECON = dpset.EventDPReconnected.__name__
+    
     _INSTANCE_NAME_CONTR = "ryu_controller_abstraction"
 
     def __init__(self, *args, **kwargs):
@@ -52,16 +68,30 @@ class Controller(dpset.DPSet):
         self._apps = {}
         self._handlers = {self._EVENT_OFP_SW_FEATURES: [],
                           self._EVENT_OFP_FLOW_REMOVED: [],
-                          self._EVENT_OFP_PACKET_IN: []}
+                          self._EVENT_OFP_PACKET_IN: [],
+                          self._EVENT_OFP_PORT_STATUS: [],
+                          self._EVENT_OFP_ERR: [],                      
+                          self._EVENT_FAUCET_RECONFIG: [],
+                          self._EVENT_FAUCET_RSLV_GW: [], 
+                          self._EVENT_FAUCET_HOST_EXP: [],
+                          self._EVENT_DPSET_EV: [],
+                          self._EVENT_DPSET_RECON: [],
+                          }
         self._wsgi = kwargs['wsgi']
         # Insert Ryu applications below
         
-        self._register_app(L2Switch(self))
-        self._register_app(ACLSwitch(self))
+        #self._register_app(L2Switch(self))
+        #self._register_app(ACLSwitch(self))
         self._register_app(Dot1XForwarder(self))
         self._register_app(CapFlow(self))
+        self._register_app(Faucet(self))
         
-
+        signal.signal(signal.SIGHUP, self.signal_handler)
+    
+    def signal_handler(self, sigid, frame):
+        if sigid == signal.SIGHUP:
+			self.send_event('dpset', EventFaucetReconfigure())
+		
     def get_ofpe_handlers(self):
         """Return the tuple of the OpenFlow protocol event handlers.
 
@@ -209,9 +239,21 @@ class Controller(dpset.DPSet):
 
         :param event: The OpenFlow event.
         """
+        
+        print self.dps
         datapath_id = event.msg.datapath_id
 
         self.logger.info("Switch \'{0}\' connected.".format(datapath_id))
+        
+        self.logger.info("Cleared rules in tables 0-10.")
+        datapath = event.msg.datapath
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+        for table_id in range(0, 10):
+            mod = parser.OFPFlowMod(datapath=datapath, table_id=table_id,
+                                    command=ofproto.OFPFC_DELETE, match=parser.OFPMatch())
+        
+        self._send_msg(datapath, mod)
 
         for app in self._handlers[self._EVENT_OFP_SW_FEATURES]:
             self._apps[app].switch_features(event)
@@ -227,6 +269,12 @@ class Controller(dpset.DPSet):
         self.logger.info("Flow table entry removed.\n\t Flow match: {"
                          "0}".format(match))
         self.logger.info("Cookie: %x", msg.cookie)
+    
+	@set_ev_cls(ofp_event.EventOFPPortStatus, MAIN_DISPATCHER)
+	def _port_status_handler(self, event):
+		for app in self._handlers[self._EVENT_OFP_PORT_STATUS]:
+			self._apps[app].port_status_handler(event)
+            
                          
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, event):
@@ -250,12 +298,71 @@ class Controller(dpset.DPSet):
         self.logger.warning('OFPErrorMsg received: type=0x%02x code=0x%02x '
                           'message=%s',
                           msg.type, msg.code, msg.data)
+        
+        for app in self._handlers[self._EVENT_OFP_ERR]:
+            self._apps[app]._error_handler(ev)
    
    
     @set_ev_cls(ofp_event.EventOFPTableFeaturesStatsReply, MAIN_DISPATCHER)
     def h(self, ev):
         print "table features stats reply"
         print ev.msg
+        
     
+    # Faucet events
     
+    @set_ev_cls(EventFaucetReconfigure, MAIN_DISPATCHER)
+    def _reload_config(self, ev):
+        for app in self._handlers[self._EVENT_FAUCET_RECONFIG]:
+            self._apps[app].reload_config(ev)
+
+    @set_ev_cls(EventFaucetResolveGateways, MAIN_DISPATCHER)
+    def resolve_gateways(self, ev):
+        for app in self._handlers[self._EVENT_FAUCET_RSLV_GW]:
+            self._apps[app].resolve_gateways(ev)
+        
+    @set_ev_cls(EventFaucetResolveGateways, MAIN_DISPATCHER)
+    def host_expire(self, ev):
+        for app in self._handlers[self._EVENT_FAUCET_HOST_EXP]:
+            self._apps[app].host_expire(ev)
     
+    def _register(self,dp):
+        '''
+        A modification of dpset.DPSet._register(), where it generates events 
+        when a datapath connects. Instead just calls functions of the registered apps
+        '''
+        self.logger.debug('DPSET: register datapath %s', dp)
+        assert dp.id is not None
+
+        # while dpid should be unique, we need to handle duplicates here
+        # because it's entirely possible for a switch to reconnect us
+        # before we notice the drop of the previous connection.
+        # in that case,
+        # - forget the older connection as it likely will disappear soon
+        # - do not send EventDP leave/enter events
+        # - keep the PortState for the dpid
+        send_dp_reconnected = False
+        if dp.id in self.dps:
+            self.logger.warning('DPSET: Multiple connections from %s',
+                                dpid_to_str(dp.id))
+            self.logger.debug('DPSET: Forgetting datapath %s', self.dps[dp.id])
+            (self.dps[dp.id]).close()
+            self.logger.debug('DPSET: New datapath %s', dp)
+            send_dp_reconnected = True
+        self.dps[dp.id] = dp
+        if dp.id not in self.port_state:
+            self.port_state[dp.id] = dpset.PortState()
+            ev = EventDP(dp, True)
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                for port in dp.ports.values():
+                    self._port_added(dp, port)
+                    ev.ports.append(port)
+            for app in self._handlers[self._EVENT_DPSET_EV]:
+                self._apps[app].handler_connect_or_disconnect(ev)
+        if send_dp_reconnected:
+            ev = dpset.EventDPReconnected(dp)
+            ev.ports = self.port_state.get(dp.id, {}).values()
+            for app in self._handlers[self._EVENT_DPSET_RECON]:
+                self._apps[app].handler_reconnect(ev)
+
