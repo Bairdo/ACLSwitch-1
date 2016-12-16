@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import signal
+import os
+import warnings
+
+
 # Ryu and OpenFlow modules
 from ryu.app.ofctl import api
 from ryu.app.wsgi import WSGIApplication
@@ -22,8 +27,6 @@ from ryu.controller.handler import set_ev_cls
 
 from ryu.controller import dpset
 from ryu.controller.dpset import EventDPReconnected, EventDP
-import warnings
-
 
 # Application modules
 from l2switch.l2switch import L2Switch
@@ -33,8 +36,15 @@ from authenticator.capflow.CapFlow import CapFlow
 
 from faucet.faucet_copy import Faucet
 from faucet.faucet_events import EventFaucetReconfigure, EventFaucetResolveGateways, EventFaucetHostExpire
+from faucet.util import get_sys_prefix
 
-import signal
+# For dealing with the faucet config file
+import ruamel.yaml as yaml
+from ruamel.yaml.comments import CommentedMap
+from threading import Lock
+
+from ryu.ofproto.ofproto_v1_3_parser import OFPMatch
+
 
 __author__ = "Jarrod N. Bakker"
 __status__ = "Development"
@@ -78,6 +88,14 @@ class Controller(dpset.DPSet):
                           self._EVENT_DPSET_RECON: [],
                           }
         self._wsgi = kwargs['wsgi']
+        
+        #faucet file 
+        self.faucet_config = os.getenv('FAUCET_CONFIG', get_sys_prefix() + '/etc/ryu/faucet/faucet.yaml')
+        self.faucet_file_lock = Lock()
+        
+        print "controller: ++++++++++++++++++++++++++++++++++++++++++++++++++====="
+        print os.getpid()
+        
         # Insert Ryu applications below
         
         #self._register_app(L2Switch(self))
@@ -365,4 +383,37 @@ class Controller(dpset.DPSet):
             ev.ports = self.port_state.get(dp.id, {}).values()
             for app in self._handlers[self._EVENT_DPSET_RECON]:
                 self._apps[app].handler_reconnect(ev)
+    
+    def _load_faucet_config_file(self):
+        with open(self.faucet_config, "r") as f:
+            return yaml.load(f, 
+                             yaml.RoundTripLoader,
+                             preserve_quotes=True)
 
+    def _write_to_faucet_config_file(self, data):
+        with open(self.faucet_config, "w") as f:
+            yaml.dump(data,
+                      f, 
+                      Dumper=yaml.RoundTripDumper, 
+                      indent=4,
+                      block_seq_indent=2,
+                      explicit_start=True)
+    
+    def add_acl_rule(self,acl_key, acl_rules):
+        with self.faucet_file_lock:
+            data = self._load_faucet_config_file()
+            
+            for match, allow in acl_rules:
+                rule = CommentedMap()
+                allow_rule = CommentedMap()
+                allow_rule.insert(0, "allow", int(allow))
+                rule.insert(0, "actions", allow_rule)
+
+                for field, value in match.iteritems():
+                    rule.insert(0, field, value)                
+                
+                final_rule = CommentedMap()
+                final_rule.insert(0, "rule", rule)
+                data["acls"][acl_key].insert(0, final_rule)
+            
+            self._write_to_faucet_config_file(data)
