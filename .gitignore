@@ -2,3 +2,5 @@
 *.pyc
 *.log
 *.idea
+Ryu_Application/faucet/
+Ryu_Appication/authenticator/
