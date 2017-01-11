@@ -15,7 +15,7 @@
 import signal
 import os
 import warnings
-
+import sys
 
 # Ryu and OpenFlow modules
 from ryu.app.ofctl import api
@@ -29,22 +29,23 @@ from ryu.controller import dpset
 from ryu.controller.dpset import EventDPReconnected, EventDP
 
 # Application modules
-from l2switch.l2switch import L2Switch
-from aclswitch.aclswitch import ACLSwitch
+#from l2switch.l2switch import L2Switch
+#from aclswitch.aclswitch import ACLSwitch
 from authenticator.dot1xforwarder.dot1xforwarder import Dot1XForwarder
 from authenticator.capflow.CapFlow import CapFlow
 
 from faucet.faucet_copy import Faucet
-from faucet.faucet_events import EventFaucetReconfigure, EventFaucetResolveGateways, EventFaucetHostExpire
 from faucet.util import get_sys_prefix
+
+#custom events
+from faucet.faucet_events import EventFaucetReconfigure, EventFaucetResolveGateways, EventFaucetHostExpire
+from authenticator.dot1xforwarder.dot1xforwarder import EventDot1xUserChange
+from authenticator.capflow.CapFlow import EventCapFlowUserChange
 
 # For dealing with the faucet config file
 import ruamel.yaml as yaml
 from ruamel.yaml.comments import CommentedMap
 from threading import Lock
-
-from ryu.ofproto.ofproto_v1_3_parser import OFPMatch
-
 
 __author__ = "Jarrod N. Bakker"
 __status__ = "Development"
@@ -67,9 +68,14 @@ class Controller(dpset.DPSet):
     _EVENT_FAUCET_RECONFIG = EventFaucetReconfigure.__name__
     _EVENT_FAUCET_RSLV_GW = EventFaucetResolveGateways.__name__
     _EVENT_FAUCET_HOST_EXP = EventFaucetHostExpire.__name__
+
+    _EVENT_CAPFLOW_USR_CHANGE = EventCapFlowUserChange.__name__
+    _EVENT_DOT1X_USR_CHANGE = EventDot1xUserChange.__name__
     
     _EVENT_DPSET_EV = dpset.EventDP.__name__
     _EVENT_DPSET_RECON = dpset.EventDPReconnected.__name__
+    
+    _SIGINT = signal.SIGINT
     
     _INSTANCE_NAME_CONTR = "ryu_controller_abstraction"
 
@@ -84,8 +90,11 @@ class Controller(dpset.DPSet):
                           self._EVENT_FAUCET_RECONFIG: [],
                           self._EVENT_FAUCET_RSLV_GW: [], 
                           self._EVENT_FAUCET_HOST_EXP: [],
+                          self._EVENT_CAPFLOW_USR_CHANGE: [],
+                          self._EVENT_DOT1X_USR_CHANGE: [],
                           self._EVENT_DPSET_EV: [],
                           self._EVENT_DPSET_RECON: [],
+                          self._SIGINT: [],
                           }
         self._wsgi = kwargs['wsgi']
         
@@ -93,22 +102,29 @@ class Controller(dpset.DPSet):
         self.faucet_config = os.getenv('FAUCET_CONFIG', get_sys_prefix() + '/etc/ryu/faucet/faucet.yaml')
         self.faucet_file_lock = Lock()
         
-        print "controller: ++++++++++++++++++++++++++++++++++++++++++++++++++====="
-        print os.getpid()
-        
         # Insert Ryu applications below
-        
-        #self._register_app(L2Switch(self))
-        #self._register_app(ACLSwitch(self))
+
         self._register_app(Dot1XForwarder(self))
         self._register_app(CapFlow(self))
         self._register_app(Faucet(self))
         
         signal.signal(signal.SIGHUP, self.signal_handler)
-    
+        signal.signal(signal.SIGUSR1, self.signal_handler)
+        signal.signal(signal.SIGUSR2, self.signal_handler)
+        signal.signal(signal.SIGINT, self.signal_handler)
+
     def signal_handler(self, sigid, frame):
         if sigid == signal.SIGHUP:
 			self.send_event('dpset', EventFaucetReconfigure())
+        elif sigid == signal.SIGUSR1:
+            self.send_event('dpset', EventDot1xUserChange())
+        elif sigid == signal.SIGUSR2:
+            self.send_event('dpset', EventCapFlowUserChange())
+        elif sigid == signal.SIGINT:
+            for app in self._handlers[self._SIGINT]:
+                self._apps[app].clean_up()
+            sys.exit(0)
+        
 		
     def get_ofpe_handlers(self):
         """Return the tuple of the OpenFlow protocol event handlers.
@@ -258,7 +274,6 @@ class Controller(dpset.DPSet):
         :param event: The OpenFlow event.
         """
         
-        print self.dps
         datapath_id = event.msg.datapath_id
 
         self.logger.info("Switch \'{0}\' connected.".format(datapath_id))
@@ -319,13 +334,6 @@ class Controller(dpset.DPSet):
         
         for app in self._handlers[self._EVENT_OFP_ERR]:
             self._apps[app]._error_handler(ev)
-   
-   
-    @set_ev_cls(ofp_event.EventOFPTableFeaturesStatsReply, MAIN_DISPATCHER)
-    def h(self, ev):
-        print "table features stats reply"
-        print ev.msg
-        
     
     # Faucet events
     
@@ -344,6 +352,18 @@ class Controller(dpset.DPSet):
         for app in self._handlers[self._EVENT_FAUCET_HOST_EXP]:
             self._apps[app].host_expire(ev)
     
+    #Other events
+    
+    @set_ev_cls(EventDot1xUserChange, MAIN_DISPATCHER)
+    def dot1x_user_change(self, ev):
+        for app in self._handlers[self._EVENT_DOT1X_USR_CHANGE]:
+            self._apps[app].reload_config(ev) 
+            
+    @set_ev_cls(EventCapFlowUserChange, MAIN_DISPATCHER)
+    def capflow_user_change(self, ev):
+        for app in self._handlers[self._EVENT_CAPFLOW_USR_CHANGE]:
+            self._apps[app].reload_config(ev)        
+            
     def _register(self,dp):
         '''
         A modification of dpset.DPSet._register(), where it generates events 
@@ -399,11 +419,17 @@ class Controller(dpset.DPSet):
                       block_seq_indent=2,
                       explicit_start=True)
     
+    def duplicated(self, data, acl_key, rule):
+        for entry in data["acls"][acl_key]:
+            if entry["rule"] == rule:
+                return True
+        return False
+    
     def add_acl_rule(self,acl_key, acl_rules):
         with self.faucet_file_lock:
             data = self._load_faucet_config_file()
             
-            for match, allow in acl_rules:
+            for match, allow in acl_rules.iteritems():
                 rule = CommentedMap()
                 allow_rule = CommentedMap()
                 allow_rule.insert(0, "allow", int(allow))
@@ -412,8 +438,9 @@ class Controller(dpset.DPSet):
                 for field, value in match.iteritems():
                     rule.insert(0, field, value)                
                 
-                final_rule = CommentedMap()
-                final_rule.insert(0, "rule", rule)
-                data["acls"][acl_key].insert(0, final_rule)
+                if not self.duplicated(data, acl_key, rule):
+                    final_rule = CommentedMap()
+                    final_rule.insert(0, "rule", rule)
+                    data["acls"][acl_key].insert(0, final_rule)
             
             self._write_to_faucet_config_file(data)
