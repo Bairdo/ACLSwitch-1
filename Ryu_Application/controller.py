@@ -58,7 +58,7 @@ class Controller(dpset.DPSet):
     instantiated from the controller class as a result.
     """
 
-    _CONTEXTS = {"wsgi": WSGIApplication}
+    #_CONTEXTS = {"wsgi": WSGIApplication}
     _EVENT_OFP_SW_FEATURES = ofp_event.EventOFPSwitchFeatures.__name__
     _EVENT_OFP_FLOW_REMOVED = ofp_event.EventOFPFlowRemoved.__name__
     _EVENT_OFP_PACKET_IN = ofp_event.EventOFPPacketIn.__name__
@@ -96,7 +96,7 @@ class Controller(dpset.DPSet):
                           self._EVENT_DPSET_RECON: [],
                           self._SIGINT: [],
                           }
-        self._wsgi = kwargs['wsgi']
+        #self._wsgi = kwargs['wsgi']
         
         #faucet file 
         self.faucet_config = os.getenv('FAUCET_CONFIG', get_sys_prefix() + '/etc/ryu/faucet/faucet.yaml')
