@@ -114,6 +114,11 @@ class Controller(dpset.DPSet):
         signal.signal(signal.SIGINT, self.signal_handler)
 
     def signal_handler(self, sigid, frame):
+        """ Deal with received signals.
+        
+        :param sigid: The signal number
+        :param frame: The current stack frame
+        """
         if sigid == signal.SIGHUP:
 			self.send_event('dpset', EventFaucetReconfigure())
         elif sigid == signal.SIGUSR1:
@@ -339,28 +344,47 @@ class Controller(dpset.DPSet):
     
     @set_ev_cls(EventFaucetReconfigure, MAIN_DISPATCHER)
     def _reload_config(self, ev):
+        """Handle Faucet Reconfigure events and alert the apps registered for it
+        
+        :param event: The Faucet event
+        """
         for app in self._handlers[self._EVENT_FAUCET_RECONFIG]:
             self._apps[app].reload_config(ev)
 
     @set_ev_cls(EventFaucetResolveGateways, MAIN_DISPATCHER)
     def resolve_gateways(self, ev):
+        """Handle Faucet Resolve Gateways events and alert the apps registered for it
+        
+        :param event: The Faucet event
+        """
         for app in self._handlers[self._EVENT_FAUCET_RSLV_GW]:
             self._apps[app].resolve_gateways(ev)
         
-    @set_ev_cls(EventFaucetResolveGateways, MAIN_DISPATCHER)
+    @set_ev_cls(EventFaucetHostExpire, MAIN_DISPATCHER)
     def host_expire(self, ev):
+        """Handle Faucet Host Expire events and alert the apps registered for it
+        
+        :param event: The Faucet event
+        """
         for app in self._handlers[self._EVENT_FAUCET_HOST_EXP]:
             self._apps[app].host_expire(ev)
     
     #Other events
-    
     @set_ev_cls(EventDot1xUserChange, MAIN_DISPATCHER)
     def dot1x_user_change(self, ev):
+        """Handle Dot1xUserChange events and alert the apps registered for it
+        
+        :param event: The Dot1x event
+        """
         for app in self._handlers[self._EVENT_DOT1X_USR_CHANGE]:
             self._apps[app].reload_config(ev) 
             
     @set_ev_cls(EventCapFlowUserChange, MAIN_DISPATCHER)
     def capflow_user_change(self, ev):
+        """Handle CapFlowUserChange events and alert the apps registered for it
+        
+        :param event: The Dot1x event
+        """
         for app in self._handlers[self._EVENT_CAPFLOW_USR_CHANGE]:
             self._apps[app].reload_config(ev)        
             
@@ -404,13 +428,24 @@ class Controller(dpset.DPSet):
             for app in self._handlers[self._EVENT_DPSET_RECON]:
                 self._apps[app].handler_reconnect(ev)
     
+    
+    # Methods to add acl rules to the faucet config file
+    
     def _load_faucet_config_file(self):
+        """ Load the faucet config file into an ordered dict
+        
+        :return: the yaml file represented in an ordered dict
+        """
         with open(self.faucet_config, "r") as f:
             return yaml.load(f, 
                              yaml.RoundTripLoader,
                              preserve_quotes=True)
 
     def _write_to_faucet_config_file(self, data):
+        """ Overwrite the config file
+        
+        :param data: The data to overwrite the config file with
+        """
         with open(self.faucet_config, "w") as f:
             yaml.dump(data,
                       f, 
@@ -420,12 +455,22 @@ class Controller(dpset.DPSet):
                       explicit_start=True)
     
     def duplicated(self, data, acl_key, rule):
+        """ Check if a rule has been duplicated in the same group
+        
+        :param acl_key: The acl group number
+        :param rule: The rule to be checked for duplicity
+        
+        """
         for entry in data["acls"][acl_key]:
             if entry["rule"] == rule:
                 return True
         return False
     
     def add_acl_rule(self,acl_key, acl_rules):
+        """ Add an acl rule to the faucet config file
+        :param acl_key: The acl group number
+        :param acl_rules: A list of OFPMatches and whether or not the match is allowed
+        """
         with self.faucet_file_lock:
             data = self._load_faucet_config_file()
             
