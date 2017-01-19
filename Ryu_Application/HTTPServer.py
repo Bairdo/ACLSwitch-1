@@ -14,7 +14,7 @@ AUTH_PATH = "/authenticate/auth"
 IDLE_PATH = "/idle"
 class HTTPHandler(BaseHTTPRequestHandler):
 
-    _contr_pid = -1
+    _contr_pid = -1 #the process ID of the controller
     dot1x_active_file = os.getenv('DOT1X_ACTIVE_HOSTS', '/etc/ryu/1x_active_users.txt')
     dot1x_idle_file = os.getenv('DOT1X_IDLE_HOSTS', '/etc/ryu/1x_idle_users.txt')
     capflow_file = os.getenv('CAPFLOW_CONFIG','/etc/ryu/capflow_config.txt')
@@ -59,24 +59,27 @@ class HTTPHandler(BaseHTTPRequestHandler):
             
     
     def authenticate(self, json_data):
-        if self.path == AUTH_PATH: 
+        if self.path == AUTH_PATH: #request is for dot1xforwarder
             if not (json_data.has_key("mac") and json_data.has_key("user")):
                 self.send_error('Invalid form\n')
                 return            
             
+            #valid request format so new user has authenticated
             self.write_to_file(self.dot1x_active_file, json_data["mac"], json_data["user"])
             self.send_signal(signal.SIGUSR1)
             message = "authenticated new client({}) at MAC: {}\n".format(json_data["user"], json_data["mac"]) 
         
-        else:
+        else: #request is for CapFlow
             if not (json_data.has_key("ip") and json_data.has_key("user")):
                 self.send_error('Invalid form\n')
                 return
             
+            #valid request format so new user has authenticated
             self.write_to_file(self.capflow_file, json_data["ip"], json_data["user"])
             self.send_signal(signal.SIGUSR2)
             message = "authenticated new client({}) at IP: {}\n".format(json_data["user"], json_data["ip"]) 
         
+        #write response 
         self._set_headers(200, 'text/html') 
         self.wfile.write(message)
         self.log_message("%s",message)
@@ -96,9 +99,10 @@ class HTTPHandler(BaseHTTPRequestHandler):
     def deauthenticate(self, filename, unique_identifier, signal_type):
         fd = lockfile.lock(filename, os.O_APPEND | os.O_WRONLY)
         changed, to_write = self.read_file(filename, unique_identifier)
-        if changed:
-            os.ftruncate(fd,0)
-            os.write(fd, to_write)
+        
+        if changed: #user has been deleted, update the file
+            os.ftruncate(fd,0) #clear the file
+            os.write(fd, to_write) 
         lockfile.unlock(fd)
         self.send_signal(signal_type)
         
@@ -108,12 +112,27 @@ class HTTPHandler(BaseHTTPRequestHandler):
         self.log_message("%s",message)
         
     def write_to_file(self, filename, str1, str2):
-        fd = lockfile.lock(filename, os.O_APPEND | os.O_WRONLY)
+        ''' Write two strings which are comma separated, to a file
+        
+        :param filename: the name of the file we are writing to
+        :param str1: the first string
+        :param str2: the second string        
+        '''
+        #try to obtain lock to prevent concurrent access
+        fd = lockfile.lock(filename, os.O_APPEND | os.O_WRONLY) 
         string = str(str1) + "," + str(str2) + "\n"
         os.write(fd, string)
         lockfile.unlock(fd)
     
     def read_file(self,filename, unique_identifier):
+        ''' Read a file and delete entries which contain the unique identifier
+        
+        :param filename: the name of the file
+        :param unique_identifier: the entry which will be deleted
+        :return: A tuple which contains a boolean of whether or not the unique 
+        identifier was found, and the contents of the file without the unique
+        identifier
+        '''
         to_write = ""
         file_changed = False
         with open(filename) as file_:
@@ -127,7 +146,11 @@ class HTTPHandler(BaseHTTPRequestHandler):
         return file_changed, to_write
     
     def send_signal(self, signal_type):
-        if self._contr_pid < 0:
+        ''' Send a signal to the controller to indicate a change in config file
+        
+        :param signal_type: SIGUSR1 for dot1xforwarder, SIGUSR2 for CapFlow
+        '''
+        if self._contr_pid < 0: #has not looked up controller process ID yet
             for process in psutil.process_iter():
                 if process.name() == "ryu-manager" and any("controller.py" in s for s in process.cmdline()):
                     self._contr_pid = process.pid
