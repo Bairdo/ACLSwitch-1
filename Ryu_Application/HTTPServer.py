@@ -109,7 +109,7 @@ class HTTPHandler(BaseHTTPRequestHandler):
         
     def write_to_file(self, filename, str1, str2):
         fd = lockfile.lock(filename, os.O_APPEND | os.O_WRONLY)
-        string = str(str1) + "," + str(str2) + "\n"p
+        string = str(str1) + "," + str(str2) + "\n"
         os.write(fd, string)
         lockfile.unlock(fd)
     
