@@ -6,12 +6,12 @@ import signal
 import sys
 import lockfile
 import psutil
+import json
+import cgi
 
-from urlparse import parse_qs
-
-PATH_PREFIX = "/v1.0/"
-AUTH_PATH = PATH_PREFIX + "authenticate/"
-IDLE_PATH = PATH_PREFIX + "idle/"
+CAPFLOW = "/v1.1/authenticate/auth"
+AUTH_PATH = "/authenticate/auth"
+IDLE_PATH = "/idle"
 class HTTPHandler(BaseHTTPRequestHandler):
 
     _contr_pid = -1
@@ -25,60 +25,65 @@ class HTTPHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
-        if self.path.startswith(AUTH_PATH):
-            self.authenticate()
-        elif self.path.startswith(IDLE_PATH):
-            self.idle()        
-        else:
-            self._set_headers(404, 'text/html')
-            error = 'Path not found\n'
-            print error
-            self.wfile.write(error)     
-            return 
-    
-    def do_DELETE(self):
-        if self.path.startswith(AUTH_PATH):
-            form = self.path[len(AUTH_PATH):] #remove the auth_path part of the string
-            info = parse_qs(form)
-            if "ip" in info and "user" in info:
-                self.deauthenticate(self.capflow_file, info["ip"][0], info["user"][0], signal.SIGUSR2)
-            elif "mac" in info and "user" in info:
-               self.deauthenticate(self.dot1x_active_file, info["mac"][0], info["user"][0], signal.SIGUSR1)
-            else:
-                self.send_error('Invalid form\n')
-                return
+        json_data = self.check_if_json()
+        if json_data == None:
+            return
+            
+        if self.path == AUTH_PATH or self.path == CAPFLOW:
+            self.authenticate(json_data)
+        elif self.path == IDLE_PATH:
+            self.idle(json_data)        
         else:
             self.send_error('Path not found\n')
+            
+   
+    def do_DELETE(self):
+        json_data = self.check_if_json()
+        if json_data == None:
             return
-    
-    def authenticate(self):
-        form = self.path[len(AUTH_PATH):] #remove the auth_path part of the string
-        info = parse_qs(form)
-        
-        if "ip" in info and "user" in info:
-            self.write_to_file(self.capflow_file, info["ip"][0], info["user"][0])
-            self.send_signal(signal.SIGUSR2)
-        elif "mac" in info and "user" in info:
-            self.write_to_file(self.dot1x_active_file, info["mac"][0], info["user"][0])
-            self.send_signal(signal.SIGUSR1)
+            
+        if self.path == AUTH_PATH:
+            #check json has the right information
+            if not (json_data.has_key("mac") and json_data.has_key("user")):
+                self.send_error('Invalid form\n')
+                return
+            self.deauthenticate(self.dot1x_active_file, json_data["mac"], signal.SIGUSR1)
+        elif self.path == CAPFLOW:
+            #check json has the right information
+            if not (json_data.has_key("ip")):
+                self.send_error('Invalid form\n')
+                return
+            self.deauthenticate(self.capflow_file, json_data["ip"], signal.SIGUSR2)
         else:
-            self.send_error('Invalid form\n')     
-            return
+            self.send_error('Path not found\n')
+            
+    
+    def authenticate(self, json_data):
+        if self.path == AUTH_PATH:
+            if not (json_data.has_key("mac") and json_data.has_key("user")):
+                self.send_error('Invalid form\n')
+                return            
+            self.write_to_file(self.dot1x_active_file, json_data["mac"], json_data["user"])
+            self.send_signal(signal.SIGUSR1)
+        
+        else:
+            if not (json_data.has_key("ip") and json_data.has_key("user")):
+                self.send_error('Invalid form\n')
+                return
+            self.write_to_file(self.capflow_file, json_data["ip"], json_data["user"])
+            self.send_signal(signal.SIGUSR2)
         
         self._set_headers(200, 'text/html')
         message = "authenticated new client" 
         print message
-        self.wfile.write(message)     
+        self.wfile.write(message)
         
-    def idle(self):
-        form = self.path[len(IDLE_PATH):] #remove the idle_path part of the string
-        info = parse_qs(form)
-        
-        if not ("mac" in info and "retrans" in info):
+    def idle(self, json_data):
+        if not (json_data.has_key("mac") and json_data.has_key("retrans")):
             self.send_error("Invalid form\n")
             return
         
-        self.write_to_file(self.dot1x_idle_file, info["mac"][0], info["retrans"][0])
+        self.write_to_file(self.dot1x_idle_file, json_data["mac"], json_data["retrans"])
         self.send_signal(signal.SIGUSR1)
         self._set_headers(200, 'text/html')
         message = "Idle user has been made to use captive portal"
@@ -95,19 +100,19 @@ class HTTPHandler(BaseHTTPRequestHandler):
         self.send_signal(signal_type)
         
         self._set_headers(200, 'text/html')
-        message = "deauthenticated client" 
+        message = "deauthenticated client\n" 
         print message
-        self.wfile.write(message)     
+        self.wfile.write(message)
         
     def write_to_file(self, filename, str1, str2):
         fd = lockfile.lock(filename, os.O_APPEND | os.O_WRONLY)
         print str1
         print str2
-        string = str1 + "," + str2 + "\n"
+        string = str(str1) + "," + str(str2) + "\n"p
         os.write(fd, string)
         lockfile.unlock(fd)
     
-    def read_file(self,filename, unique_identifier, user):
+    def read_file(self,filename, unique_identifier):
         to_write = ""
         file_changed = False
         with open(filename) as file_:
@@ -128,11 +133,26 @@ class HTTPHandler(BaseHTTPRequestHandler):
                     break
         os.kill(self._contr_pid,signal_type)  
     
+    def check_if_json(self):
+        ctype, pdict = cgi.parse_header(self.headers.getheader('content-type'))
+        if ctype != 'application/json':
+            self.send_error("Data is not a JSON object\n")
+            return None
+        content_length = int(self.headers.getheader('content-length'))
+        data = self.rfile.read(content_length)
+        try:
+            json_data = json.loads(data)
+        except ValueError:
+             self.send_error("Not JSON object\n")
+             return None
+        
+        return json_data
+    
     def send_error(self,error):
         self._set_headers(404, 'text/html')
         print error
         self.wfile.write(error)  
-         
+
     do_GET = do_POST
         
     
