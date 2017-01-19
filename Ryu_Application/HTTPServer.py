@@ -93,9 +93,9 @@ class HTTPHandler(BaseHTTPRequestHandler):
         self.log_message("%s",message)
         self.wfile.write(message)
         
-    def deauthenticate(self, filename, unique_identifier, user, signal_type):
+    def deauthenticate(self, filename, unique_identifier, signal_type):
         fd = lockfile.lock(filename, os.O_APPEND | os.O_WRONLY)
-        changed, to_write = self.read_file(filename, unique_identifier, user)
+        changed, to_write = self.read_file(filename, unique_identifier)
         if changed:
             os.ftruncate(fd,0)
             os.write(fd, to_write)
