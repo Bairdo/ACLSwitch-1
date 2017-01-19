@@ -18,7 +18,7 @@ import warnings
 import sys
 
 # Ryu and OpenFlow modules
-from ryu.app.ofctl import api
+#from ryu.app.ofctl import api
 from ryu.app.wsgi import WSGIApplication
 from ryu.base import app_manager
 from ryu.controller import ofp_event
@@ -268,7 +268,9 @@ class Controller(dpset.DPSet):
         :param datapath_id: ID of a datapath i.e. switch ID.
         :return: Datapath object.
         """
-        return api.get_datapath(self, datapath_id)
+        print "++++++++++++++++++++++++++++++++Need to use switch_get_datapath+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
+        return None
+        #return api.get_datapath(self, datapath_id)
 
     # OpenFlow switch event handlers
 
@@ -387,7 +389,7 @@ class Controller(dpset.DPSet):
         """
         for app in self._handlers[self._EVENT_CAPFLOW_USR_CHANGE]:
             self._apps[app].reload_config(ev)        
-            
+        
     def _register(self,dp):
         '''
         A modification of dpset.DPSet._register(), where it generates events 
