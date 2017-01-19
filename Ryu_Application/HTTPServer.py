@@ -59,24 +59,27 @@ class HTTPHandler(BaseHTTPRequestHandler):
             
     
     def authenticate(self, json_data):
-        if self.path == AUTH_PATH:
+        if self.path == AUTH_PATH: 
             if not (json_data.has_key("mac") and json_data.has_key("user")):
                 self.send_error('Invalid form\n')
                 return            
+            
             self.write_to_file(self.dot1x_active_file, json_data["mac"], json_data["user"])
             self.send_signal(signal.SIGUSR1)
+            message = "authenticated new client({}) at MAC: {}\n".format(json_data["user"], json_data["mac"]) 
         
         else:
             if not (json_data.has_key("ip") and json_data.has_key("user")):
                 self.send_error('Invalid form\n')
                 return
+            
             self.write_to_file(self.capflow_file, json_data["ip"], json_data["user"])
             self.send_signal(signal.SIGUSR2)
+            message = "authenticated new client({}) at IP: {}\n".format(json_data["user"], json_data["ip"]) 
         
-        self._set_headers(200, 'text/html')
-        message = "authenticated new client" 
-        print message
+        self._set_headers(200, 'text/html') 
         self.wfile.write(message)
+        self.log_message("%s",message)
         
     def idle(self, json_data):
         if not (json_data.has_key("mac") and json_data.has_key("retrans")):
@@ -86,8 +89,8 @@ class HTTPHandler(BaseHTTPRequestHandler):
         self.write_to_file(self.dot1x_idle_file, json_data["mac"], json_data["retrans"])
         self.send_signal(signal.SIGUSR1)
         self._set_headers(200, 'text/html')
-        message = "Idle user has been made to use captive portal"
-        print message
+        message = "Idle user on {} has been made to use captive portal after {} retransmissions\n".format(json_data["mac"], json_data["retrans"])
+        self.log_message("%s",message)
         self.wfile.write(message)
         
     def deauthenticate(self, filename, unique_identifier, user, signal_type):
@@ -100,14 +103,12 @@ class HTTPHandler(BaseHTTPRequestHandler):
         self.send_signal(signal_type)
         
         self._set_headers(200, 'text/html')
-        message = "deauthenticated client\n" 
-        print message
+        message = "deauthenticated client at {} \n".format(unique_identifier)
         self.wfile.write(message)
+        self.log_message("%s",message)
         
     def write_to_file(self, filename, str1, str2):
         fd = lockfile.lock(filename, os.O_APPEND | os.O_WRONLY)
-        print str1
-        print str2
         string = str(str1) + "," + str(str2) + "\n"p
         os.write(fd, string)
         lockfile.unlock(fd)
@@ -134,7 +135,12 @@ class HTTPHandler(BaseHTTPRequestHandler):
         os.kill(self._contr_pid,signal_type)  
     
     def check_if_json(self):
-        ctype, pdict = cgi.parse_header(self.headers.getheader('content-type'))
+        try:
+            ctype, pdict = cgi.parse_header(self.headers.getheader('content-type'))
+        except:
+            self.send_error("No content-type header\n")
+            return None
+            
         if ctype != 'application/json':
             self.send_error("Data is not a JSON object\n")
             return None
@@ -150,9 +156,9 @@ class HTTPHandler(BaseHTTPRequestHandler):
     
     def send_error(self,error):
         self._set_headers(404, 'text/html')
-        print error
-        self.wfile.write(error)  
-
+        self.log_message("Error: %s", error)
+        self.wfile.write(error) 
+        
     do_GET = do_POST
         
     
