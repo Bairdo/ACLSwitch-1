@@ -289,11 +289,17 @@ class Controller(dpset.DPSet):
         datapath = event.msg.datapath
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
-        for table_id in range(0, 10):
-            mod = parser.OFPFlowMod(datapath=datapath, table_id=table_id,
-                                    command=ofproto.OFPFC_DELETE, match=parser.OFPMatch())
+
+
+        mod = parser.OFPFlowMod(datapath=datapath, table_id=ofproto.OFPTT_ALL,
+                                command=ofproto.OFPFC_DELETE, priority=0,
+                                match=parser.OFPMatch(), out_port=ofproto.OFPP_ANY, 
+                                out_group=ofproto.OFPG_ANY,
+                                cookie=0, cookie_mask=0,
+                                buffer_id=0xffffffff)
+
+        datapath.send_msg(mod)
         
-        self._send_msg(datapath, mod)
 
         for app in self._handlers[self._EVENT_OFP_SW_FEATURES]:
             self._apps[app].switch_features(event)
