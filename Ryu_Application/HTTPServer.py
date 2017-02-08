@@ -56,7 +56,49 @@ class HTTPHandler(BaseHTTPRequestHandler):
             self.deauthenticate(self.capflow_file, json_data["ip"], signal.SIGUSR2)
         else:
             self.send_error('Path not found\n')
-            
+    
+    def update_file(self, filename, token1, token2):
+    '''
+    Typically token1 will be the mac address,
+    And token2 will be the username or the idle_count.
+    '''
+        fd = lockfile.lock(filename, os.O_RDWR)
+        text = ""
+
+        # read file 100 bytes at a time
+        while True:
+            s = os.read(fd, 100)
+            if len(s) != 0:
+                text = text + s
+            else:
+                break
+        print "text " + text
+        # go back to start of file.
+        os.lseek(fd, 0, os.SEEK_SET)
+        # set the file length to 0, (clear the file)
+        os.ftruncate(fd, 0)
+
+        if len(text) == 0:
+            os.write(fd, token1 + "," + token2 + "\n")
+        else:
+            flag = False
+            for l in text.split("\n"):
+                print "L: " + l
+                if len(l) != 0:
+                    splits = l.split(",")
+                    print "splits " + str(splits)
+                    ltoken1 = splits[0]
+                    ltoken2 = splits[1]
+                    if ltoken1 == token1:
+                        print  + "macs are the same"
+                        os.write(fd, token1 + "," + token2 + "\n")
+                        flag = True
+                    else:
+                        print ltoken1 + " " + token1 + " are different"
+                        os.write(fd, ltoken1 + "," + ltoken2 + "\n")
+            if not flag:
+                os.write(fd, token1 + "," + token2 + "\n")
+        lockfile.unlock(fd)
     
     def authenticate(self, json_data):
         if self.path == AUTH_PATH: #request is for dot1xforwarder
@@ -65,7 +107,8 @@ class HTTPHandler(BaseHTTPRequestHandler):
                 return            
             
             #valid request format so new user has authenticated
-            self.write_to_file(self.dot1x_active_file, json_data["mac"], json_data["user"])
+            self.update_file(self.dot1x_active_file, json_data["mac"], json_data["user"])
+            #self.write_to_file(self.dot1x_active_file, json_data["mac"], json_data["user"])
             self.send_signal(signal.SIGUSR1)
             message = "authenticated new client({}) at MAC: {}\n".format(json_data["user"], json_data["mac"]) 
         
@@ -75,7 +118,7 @@ class HTTPHandler(BaseHTTPRequestHandler):
                 return
             
             #valid request format so new user has authenticated
-            self.write_to_file(self.capflow_file, json_data["ip"], json_data["user"])
+            self.update_file(self.capflow_file, json_data["ip"], json_data["user"])
             self.send_signal(signal.SIGUSR2)
             message = "authenticated new client({}) at IP: {}\n".format(json_data["user"], json_data["ip"]) 
         
@@ -89,7 +132,7 @@ class HTTPHandler(BaseHTTPRequestHandler):
             self.send_error("Invalid form\n")
             return
         
-        self.write_to_file(self.dot1x_idle_file, json_data["mac"], json_data["retrans"])
+        self.update_file(self.dot1x_idle_file, json_data["mac"], json_data["retrans"])
         self.send_signal(signal.SIGUSR1)
         self._set_headers(200, 'text/html')
         message = "Idle user on {} has been made to use captive portal after {} retransmissions\n".format(json_data["mac"], json_data["retrans"])
@@ -110,20 +153,7 @@ class HTTPHandler(BaseHTTPRequestHandler):
         message = "deauthenticated client at {} \n".format(unique_identifier)
         self.wfile.write(message)
         self.log_message("%s",message)
-        
-    def write_to_file(self, filename, str1, str2):
-        ''' Write two strings which are comma separated, to a file
-        
-        :param filename: the name of the file we are writing to
-        :param str1: the first string
-        :param str2: the second string        
-        '''
-        #try to obtain lock to prevent concurrent access
-        fd = lockfile.lock(filename, os.O_APPEND | os.O_WRONLY) 
-        string = str(str1) + "," + str(str2) + "\n"
-        os.write(fd, string)
-        lockfile.unlock(fd)
-    
+
     def read_file(self,filename, unique_identifier):
         ''' Read a file and delete entries which contain the unique identifier
         
