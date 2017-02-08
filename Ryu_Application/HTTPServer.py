@@ -58,10 +58,10 @@ class HTTPHandler(BaseHTTPRequestHandler):
             self.send_error('Path not found\n')
     
     def update_file(self, filename, token1, token2):
-    '''
-    Typically token1 will be the mac address,
-    And token2 will be the username or the idle_count.
-    '''
+        '''
+        Typically token1 will be the mac address,
+        And token2 will be the username or the idle_count.
+        '''
         fd = lockfile.lock(filename, os.O_RDWR)
         text = ""
 
