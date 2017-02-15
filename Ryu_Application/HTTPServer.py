@@ -27,6 +27,7 @@ class HTTPHandler(BaseHTTPRequestHandler):
     dot1x_idle_file = os.getenv('DOT1X_IDLE_HOSTS',
                                 '/etc/ryu/1x_idle_users.txt')
     capflow_file = os.getenv('CAPFLOW_CONFIG', '/etc/ryu/capflow_config.txt')
+    controller_pid_file = os.getenv('CONTR_PID', '/etc/ryu/contr_pid')
 
     def _set_headers(self, code, ctype):
         self.send_response(code)
@@ -165,13 +166,7 @@ class HTTPHandler(BaseHTTPRequestHandler):
 
         :param signal_type: SIGUSR1 for dot1xforwarder, SIGUSR2 for CapFlow
         '''
-        #if self._contr_pid < 0:  #has not looked up controller process ID yet
-            #for process in psutil.process_iter():
-                #if process.name() == "ryu-manager" and any(
-                        #"controller.py" in s for s in process.cmdline()):
-                    #self._contr_pid = process.pid
-                    #break
-        with open(os.path.expanduser("~/controller_pid.txt"), "r") as f:
+        with open(self.controller_pid_file, "r") as f:
             self._contr_pid = int(f.read())
         os.kill(self._contr_pid, signal_type)
 
